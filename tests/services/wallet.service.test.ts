@@ -78,7 +78,15 @@ describe('WalletService', () => {
     const secret2 = await wsNew.getDecryptedPrivateKey('u_rotate', 'EVM');
     expect(secret2).toBe(secret1);
 
+    // Because of automatic re-encryption on rotation, redis is now updated with newKey!
+    // Therefore, wsNoFallback (using newKey without fallback) can now decrypt it successfully.
     const wsNoFallback = new WalletService(newKey, redis);
-    await expect(wsNoFallback.getDecryptedPrivateKey('u_rotate', 'EVM')).rejects.toThrow();
+    const secret3 = await wsNoFallback.getDecryptedPrivateKey('u_rotate', 'EVM');
+    expect(secret3).toBe(secret1);
+
+    // A service with an entirely different key cannot decrypt it
+    const wrongKey = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+    const wsWrong = new WalletService(wrongKey, redis);
+    await expect(wsWrong.getDecryptedPrivateKey('u_rotate', 'EVM')).rejects.toThrow();
   });
 });

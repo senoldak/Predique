@@ -9,12 +9,35 @@ export interface WebSocketManager {
   wss: WebSocketServer;
 }
 
+const MAX_WS_PER_IP = 10;
+const ipConnections = new Map<string, number>();
+
+function getWsIp(req: import('node:http').IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length > 0) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
 export function createWebSocketServer(server: HttpServer): WebSocketManager {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const clients = new Set<WebSocket>();
+  const clientIps = new Map<WebSocket, string>();
   const subscriptions = new Map<WebSocket, Set<string>>();
 
-  wss.on('connection', (ws: WebSocket) => {
+  wss.on('connection', (ws: WebSocket, req) => {
+    const ip = getWsIp(req);
+    const currentCount = ipConnections.get(ip) || 0;
+
+    if (currentCount >= MAX_WS_PER_IP) {
+      console.warn(`security blocked: ws connection rejected for ip=${ip} (limit=${MAX_WS_PER_IP} exceeded)`);
+      ws.close(1008, 'Max connections per IP exceeded');
+      return;
+    }
+
+    ipConnections.set(ip, currentCount + 1);
+    clientIps.set(ws, ip);
     clients.add(ws);
     subscriptions.set(ws, new Set<string>(['*'])); // default subscribe to wildcard all
 
@@ -74,15 +97,23 @@ export function createWebSocketServer(server: HttpServer): WebSocketManager {
       }
     });
 
-    ws.on('close', () => {
+    const cleanupWs = () => {
       clients.delete(ws);
       subscriptions.delete(ws);
-    });
+      const ip = clientIps.get(ws);
+      if (ip) {
+        clientIps.delete(ws);
+        const count = ipConnections.get(ip) || 1;
+        if (count <= 1) {
+          ipConnections.delete(ip);
+        } else {
+          ipConnections.set(ip, count - 1);
+        }
+      }
+    };
 
-    ws.on('error', () => {
-      clients.delete(ws);
-      subscriptions.delete(ws);
-    });
+    ws.on('close', cleanupWs);
+    ws.on('error', cleanupWs);
   });
 
   const broadcastToChannel = (channel: string, event: string, data: unknown) => {

@@ -402,7 +402,17 @@ export class WalletService {
       this.previousMasterKey
     );
     if (usedPrevious) {
-      console.warn(`security event: wallet decrypted with previous master key user=${userId} chain=${chain} (re-encrypt pending)`);
+      console.warn(`security event: wallet decrypted with previous master key user=${userId} chain=${chain} (auto-migrating to current master key)`);
+      try {
+        const reEncrypted = encryptKey(plaintext, this.masterKey);
+        found.ciphertext = reEncrypted.ciphertext;
+        found.iv = reEncrypted.iv;
+        found.authTag = reEncrypted.authTag;
+        await this.saveWallets(userId);
+        console.log(`security event: wallet successfully re-encrypted with current master key user=${userId} chain=${chain}`);
+      } catch (reEncryptErr) {
+        console.error(`security error: failed to re-encrypt wallet user=${userId} chain=${chain}:`, (reEncryptErr as Error).message);
+      }
     }
     return plaintext;
   }
